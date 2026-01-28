@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          echo "Checking required files..."
+          files=(
+            "README.md"
+            "LICENSE"
+            "SECURITY.md"
+            "docs/00-evaluate-in-10min.md"
+          )
+          missing=0
+          for file in "${files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "MISSING: $file"
+              missing=1
+            else
+              echo "OK: $file"
+            fi
+          done
+          if [ $missing -eq 1 ]; then
+            echo "Required files are missing!"
+            exit 1
+          fi
+          echo "All required files present."
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: |
+            **/*.md
+            !local/**
+          config: |
+            {
+              "default": true,
+              "MD013": false,
+              "MD033": false,
+              "MD041": false
+            }
+
+  links:
+    name: Check Internal Links
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check internal links
+        run: |
+          echo "Checking internal markdown links..."
+          errors=0
+
+          # Find all markdown files (excluding local/)
+          while IFS= read -r -d '' file; do
+            # Extract markdown links [text](path)
+            grep -oE '\[.*\]\([^)]+\)' "$file" 2>/dev/null | while read -r link; do
+              # Extract path from link
+              path=$(echo "$link" | sed -E 's/.*\(([^)#]+).*/\1/')
+
+              # Skip external links and anchors
+              if [[ "$path" =~ ^https?:// ]] || [[ "$path" =~ ^# ]] || [[ -z "$path" ]]; then
+                continue
+              fi
+
+              # Resolve relative path from file's directory
+              dir=$(dirname "$file")
+              target="$dir/$path"
+
+              # Normalize path
+              target=$(realpath -m "$target" 2>/dev/null || echo "$target")
+
+              if [ ! -e "$target" ]; then
+                echo "BROKEN: $file -> $path"
+                errors=1
+              fi
+            done
+          done < <(find . -name "*.md" -not -path "./local/*" -print0)
+
+          if [ $errors -eq 1 ]; then
+            echo "Broken links found!"
+            exit 1
+          fi
+          echo "All internal links valid."
